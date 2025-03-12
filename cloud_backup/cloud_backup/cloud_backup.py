@@ -1,9 +1,51 @@
 import frappe
-import requests
 import os
+from flask import Response
 from frappe.utils.backups import BackupGenerator
 from frappe import _
 frappe.utils.logger.set_log_level("DEBUG")
+
+@frappe.whitelist()
+def download_backup(filename):
+    """Stream the backup file to the client."""
+    try:
+        backup = BackupGenerator(
+                db_name=frappe.conf.db_name,
+                user=frappe.conf.db_name,
+                password=frappe.conf.db_password,
+                db_host=frappe.conf.db_host or "127.0.0.1",
+                db_port=frappe.conf.db_port or "3306",
+                db_type="mariadb"
+            )
+        backup.get_backup()
+        frappe.logger("api").info(f"Backup generated: {backup.backup_path_db}")
+        frappe.logger("api").info(f"Backup generated: {backup.backup_path_files}")
+        frappe.logger("api").info(f"Backup generated: {backup.backup_path_private_files}")
+        # Define the path to the backup files directory
+        if filename == "database.sql.gz":
+            file_path = backup.backup_path_db
+        elif filename == "files.tar":
+            file_path = backup.backup_path_files
+        elif filename == "private-files.tar":
+            file_path = backup.backup_path_private_files
+        else:
+            frappe.throw(_("Invalid filename requested"))
+
+        # Check if the file exists
+        if not os.path.exists(file_path):
+            frappe.throw(_("File not found"), frappe.DoesNotExistError)
+
+        # Stream the file using a generator
+        def generate():
+            with open(file_path, 'rb') as f:
+                while chunk := f.read(8192):
+                    yield chunk
+
+        return Response(generate(), mimetype='application/octet-stream', headers={"Content-Disposition": f"attachment;filename={os.path.basename(file_path)}"})
+
+    except Exception as e:
+        frappe.logger("api").error(f"Error during file streaming: {str(e)}")
+        frappe.throw(_("An error occurred during file streaming"))
 
 @frappe.whitelist()
 def upload_backup():
