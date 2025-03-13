@@ -5,23 +5,22 @@ from frappe.utils.backups import BackupGenerator
 from frappe import _
 frappe.utils.logger.set_log_level("DEBUG")
 
+CHUNK_SIZE = 50 * 1024 * 1024  # 50 MB
+
 @frappe.whitelist()
-def download_backup(filename):
-    """Stream the backup file to the client."""
+def get_backup_info(filename):
+    """Return file size and other metadata for the backup file."""
     try:
         backup = BackupGenerator(
-                db_name=frappe.conf.db_name,
-                user=frappe.conf.db_name,
-                password=frappe.conf.db_password,
-                db_host=frappe.conf.db_host or "127.0.0.1",
-                db_port=frappe.conf.db_port or "3306",
-                db_type="mariadb"
-            )
+            db_name=frappe.conf.db_name,
+            user=frappe.conf.db_name,
+            password=frappe.conf.db_password,
+            db_host=frappe.conf.db_host or "127.0.0.1",
+            db_port=frappe.conf.db_port or "3306",
+            db_type="mariadb"
+        )
         backup.get_backup()
-        frappe.logger("api").info(f"Backup generated: {backup.backup_path_db}")
-        frappe.logger("api").info(f"Backup generated: {backup.backup_path_files}")
-        frappe.logger("api").info(f"Backup generated: {backup.backup_path_private_files}")
-        # Define the path to the backup files directory
+
         if filename == "database.sql.gz":
             file_path = backup.backup_path_db
         elif filename == "files.tar":
@@ -31,21 +30,105 @@ def download_backup(filename):
         else:
             frappe.throw(_("Invalid filename requested"))
 
-        # Check if the file exists
         if not os.path.exists(file_path):
             frappe.throw(_("File not found"), frappe.DoesNotExistError)
 
-        # Stream the file using a generator
+        file_size = os.path.getsize(file_path)
+
+        frappe.logger("api").info(f"file_size: {file_size}, chunk_size: {CHUNK_SIZE}")
+        return {
+            "file_size": file_size,
+            "chunk_size": CHUNK_SIZE
+        }
+
+    except Exception as e:
+        frappe.logger("api").error(f"Error during file size retrieval: {str(e)}")
+        frappe.throw(_("An error occurred while retrieving file information"))
+
+@frappe.whitelist()
+def download_backup_chunk(filename, chunk_number):
+    """Stream a specific chunk of the backup file to the client."""
+    try:
+        backup = BackupGenerator(
+            db_name=frappe.conf.db_name,
+            user=frappe.conf.db_name,
+            password=frappe.conf.db_password,
+            db_host=frappe.conf.db_host or "127.0.0.1",
+            db_port=frappe.conf.db_port or "3306",
+            db_type="mariadb"
+        )
+        backup.get_backup()
+
+        if filename == "database.sql.gz":
+            file_path = backup.backup_path_db
+        elif filename == "files.tar":
+            file_path = backup.backup_path_files
+        elif filename == "private-files.tar":
+            file_path = backup.backup_path_private_files
+        else:
+            frappe.throw(_("Invalid filename requested"))
+
+        if not os.path.exists(file_path):
+            frappe.throw(_("File not found"), frappe.DoesNotExistError)
+
+        start_byte = int(chunk_number) * CHUNK_SIZE
+        end_byte = int(start_byte) + CHUNK_SIZE
+
         def generate():
             with open(file_path, 'rb') as f:
-                while chunk := f.read(8192):
-                    yield chunk
+                f.seek(start_byte)
+                yield f.read(CHUNK_SIZE)
 
-        return Response(generate(), mimetype='application/octet-stream', headers={"Content-Disposition": f"attachment;filename={os.path.basename(file_path)}"})
+        return Response(generate(), mimetype='application/octet-stream', headers={
+            "Content-Disposition": f"attachment;filename={filename}.part{chunk_number}",
+            "Content-Range": f"bytes {start_byte}-{end_byte}/{os.path.getsize(file_path)}"
+        })
 
     except Exception as e:
         frappe.logger("api").error(f"Error during file streaming: {str(e)}")
         frappe.throw(_("An error occurred during file streaming"))
+
+# @frappe.whitelist()
+# def download_backup(filename):
+#     """Stream the backup file to the client."""
+#     try:
+#         backup = BackupGenerator(
+#                 db_name=frappe.conf.db_name,
+#                 user=frappe.conf.db_name,
+#                 password=frappe.conf.db_password,
+#                 db_host=frappe.conf.db_host or "127.0.0.1",
+#                 db_port=frappe.conf.db_port or "3306",
+#                 db_type="mariadb"
+#             )
+#         backup.get_backup()
+#         frappe.logger("api").info(f"Backup generated: {backup.backup_path_db}")
+#         frappe.logger("api").info(f"Backup generated: {backup.backup_path_files}")
+#         frappe.logger("api").info(f"Backup generated: {backup.backup_path_private_files}")
+#         # Define the path to the backup files directory
+#         if filename == "database.sql.gz":
+#             file_path = backup.backup_path_db
+#         elif filename == "files.tar":
+#             file_path = backup.backup_path_files
+#         elif filename == "private-files.tar":
+#             file_path = backup.backup_path_private_files
+#         else:
+#             frappe.throw(_("Invalid filename requested"))
+
+#         # Check if the file exists
+#         if not os.path.exists(file_path):
+#             frappe.throw(_("File not found"), frappe.DoesNotExistError)
+
+#         # Stream the file using a generator
+#         def generate():
+#             with open(file_path, 'rb') as f:
+#                 while chunk := f.read(8192):
+#                     yield chunk
+
+#         return Response(generate(), mimetype='application/octet-stream', headers={"Content-Disposition": f"attachment;filename={os.path.basename(file_path)}"})
+
+#     except Exception as e:
+#         frappe.logger("api").error(f"Error during file streaming: {str(e)}")
+#         frappe.throw(_("An error occurred during file streaming"))
 
 @frappe.whitelist()
 def upload_backup():
