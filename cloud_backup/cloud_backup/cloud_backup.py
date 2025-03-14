@@ -5,7 +5,7 @@ from frappe.utils.backups import BackupGenerator
 from frappe import _
 frappe.utils.logger.set_log_level("DEBUG")
 
-CHUNK_SIZE = 20 * 1024 * 1024  # 20 MB
+CHUNK_SIZE = 50 * 1024 * 1024  # 20 MB
 
 @frappe.whitelist()
 def get_backup_info(filename):
